@@ -64,7 +64,6 @@ export const anonSupaFunc = async (
 
 export const siweConfig: SIWEConfig = {
   getNonce: async () => {
-    console.log("GETNONCE KLONTOL");
     const response = await fetch(
       `${supabase.url}/functions/v1/siwe?method=nonce`,
       {

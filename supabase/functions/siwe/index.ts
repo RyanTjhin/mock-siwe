@@ -51,12 +51,12 @@ async function jwtVerify(jwt: string) {
     return;
   }
   const sig = await sign(`${parts[0]}.${parts[1]}`);
-  if (encodeBase64Url(sig) !== parts[2]) {
-    console.log("invalid sig", encodeBase64Url(sig), parts[2]);
+  if (sig !== parts[2]) {
+    console.log("invalid sig", sig, parts[2]);
     return;
   }
   const pyld = JSON.parse(new TextDecoder().decode(decodeBase64Url(parts[1])));
-  if (pyld.exp && Date.now() > pyld.exp) {
+  if (Date.now() / 1000 > pyld.exp) {
     console.log("invalid exp");
     return;
   }
