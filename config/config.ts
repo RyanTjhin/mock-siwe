@@ -78,7 +78,6 @@ export const siweConfig: SIWEConfig = {
     );
     if (!response) throw new Error("No nonce returned.");
     const res = await response.json();
-    console.log(res.nonce);
     return res.nonce;
   },
 
