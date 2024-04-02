@@ -1,13 +1,9 @@
 import {
-  decodeBase64Url,
   encodeBase64Url,
 } from "https://deno.land/std@0.221.0/encoding/base64url.ts";
 import { generateNonce, SiweMessage } from "https://esm.sh/siwe@2.1.4";
 
-type JWTPayload = {
-  walletAddress: string;
-  exp: number;
-};
+import { create, verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*", // FIXME change these to your accepted domains!
@@ -16,7 +12,11 @@ const corsHeaders = {
 
 // JWT Helpers
 const jwtSecret = Deno.env.get("JWT_SECRET");
-// const jwtSecret = "super-secret-jwt-token-with-at-least-32-characters-long";
+
+if (!jwtSecret || jwtSecret.length < 32) {
+  throw new Error("Invalid JWT secret: Must be at least 32 characters long.");
+}
+
 const jwtKey = await crypto.subtle.importKey(
   "raw",
   new TextEncoder().encode(jwtSecret),
@@ -26,41 +26,17 @@ const jwtKey = await crypto.subtle.importKey(
 );
 
 async function sign(msg: string) {
-  const sig = await crypto.subtle.sign(
-    "HMAC",
-    jwtKey,
-    new TextEncoder().encode(msg),
-  );
-  return encodeBase64Url(sig);
-}
-
-async function jwtSign(payload: JWTPayload) { //TODO: Add types
-  const h = encodeBase64Url(
-    new TextEncoder().encode(JSON.stringify({ alg: "HS256", typ: "JWT" })),
-  );
-  const p = encodeBase64Url(new TextEncoder().encode(JSON.stringify(payload)));
-  const t = `${h}.${p}`;
-  const sig = await sign(t);
-  return t + "." + encodeBase64Url(sig);
-}
-
-async function jwtVerify(jwt: string) {
-  const parts = jwt.split(".");
-  if (parts.length !== 3) {
-    console.log("bad length");
-    return;
+  try {
+    const sig = await crypto.subtle.sign(
+      "HMAC",
+      jwtKey,
+      new TextEncoder().encode(msg),
+    );
+    return encodeBase64Url(sig);
+  } catch (error) {
+    console.error("Error signing message: ", error);
+    throw error;
   }
-  const sig = await sign(`${parts[0]}.${parts[1]}`);
-  if (sig !== parts[2]) {
-    console.log("invalid sig", sig, parts[2]);
-    return;
-  }
-  const pyld = JSON.parse(new TextDecoder().decode(decodeBase64Url(parts[1])));
-  if (Date.now() / 1000 > pyld.exp) {
-    console.log("invalid exp");
-    return;
-  }
-  return pyld;
 }
 
 function unauthorized() {
@@ -79,27 +55,18 @@ Deno.serve(async (req) => {
     if (params.get("method") === "nonce") {
       const nonce = generateNonce();
       const sig = await sign(nonce);
-      console.log(
-        "getNonce Res",
-        new Response(
-          JSON.stringify({ nonce, sig }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        ),
-      );
       return new Response(
         JSON.stringify({ nonce, sig }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     } else if (params.get("method") === "session") {
-      const auth = req.headers.get("authorization")?.replace("Bearer ", "");
-      console.log("auth", auth);
+      const auth = req.headers.get("Authorization")?.replace("Bearer ", "");
       if (!auth || auth.length === 0) return unauthorized();
-      const jwtPayload = await jwtVerify(auth);
 
+      const jwtPayload = await verify(auth, jwtKey);
       if (!auth || !jwtPayload) return unauthorized();
-
       return new Response(
-        JSON.stringify({ address: jwtPayload?.walletAddress, chainId: 1 }),
+        JSON.stringify({ address: jwtPayload.walletAddress, chainId: 1 }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     } else {
@@ -110,6 +77,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") {
     return new Response("", { status: 405 });
   }
+  // const { message, signature, hmac } = await req.json();
   const { message, signature, hmac } = await req.json();
 
   // the first verification is the wallet ECDSA signature
@@ -117,47 +85,16 @@ Deno.serve(async (req) => {
 
   // the second one is against the nonce HMAC we issued earlier
   if (valid.success && await sign(valid.data.nonce) === hmac) {
-    const jwt = await jwtSign(
-      {
-        walletAddress: valid.data.address,
-        exp: Date.now() + 60 * 60 * 1000, // validity 1 hour
-      },
-    );
+    // if (valid.success) {
+    const jwt = await create({ alg: "HS256", typ: "JWT" }, {
+      walletAddress: valid.data.address,
+      exp: Date.now() + 60 * 60 * 1000, // validity 1 hour
+    }, jwtKey);
     return new Response(
       JSON.stringify({ jwt }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }
 
-  return new Response("ok");
+  return new Response("SHIT POSTING AINT WORKING BRUV");
 });
-
-// Follow this setup guide to integrate the Deno language server with your editor:
-// https://deno.land/manual/getting_started/setup_your_environment
-// This enables autocomplete, go to definition, etc.
-
-// console.log("Hello from Functions!")
-
-// Deno.serve(async (req) => {
-//   const { name } = await req.json()
-//   const data = {
-//     message: `Hello ${name}!`,
-//   }
-
-//   return new Response(
-//     JSON.stringify(data),
-//     { headers: { "Content-Type": "application/json" } },
-//   )
-// })
-
-/* To invoke locally:
-
-  1. Run `supabase start` (see: https://supabase.com/docs/reference/cli/supabase-start)
-  2. Make an HTTP request:
-
-  curl -i --location --request POST 'http://127.0.0.1:54321/functions/v1/siwe' \
-    --header 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0' \
-    --header 'Content-Type: application/json' \
-    --data '{"name":"Functions"}'
-
-*/

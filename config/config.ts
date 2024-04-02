@@ -1,4 +1,5 @@
 import { SIWEConfig } from "connectkit";
+import { error } from "console";
 import { SiweMessage } from "siwe";
 
 export const supabase = {
@@ -17,51 +18,6 @@ export const supabase = {
   jwtStorageKey: "supabase-auth-jwt",
 };
 
-export const endpointNames = [
-  "login",
-  "nonce",
-  "session",
-  "logout",
-] as const;
-
-export const endpoints = Object.fromEntries(endpointNames.map((name) => [
-  name,
-  `${supabase.url}/functions/v1/siwe?method=${name}`,
-]));
-
-export const anonSupaFunc = async (
-  name: keyof typeof endpoints,
-  args: unknown = {},
-) => {
-  if (!endpoints[name]) {
-    throw new Error(`No endpoint for ${name}.`);
-  }
-
-  const response = await fetch(endpoints[name], {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${supabase.anonKey}`,
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "*",
-    },
-    body: JSON.stringify(args),
-    credentials: "include",
-  });
-
-  if (!response.ok) return { error: response.statusText };
-
-  const text = await response.text();
-  let json = null;
-  try {
-    json = JSON.parse(text);
-  } catch (err) {
-    null;
-  }
-
-  return { response, text, json };
-};
-
 export const siweConfig: SIWEConfig = {
   getNonce: async () => {
     const response = await fetch(
@@ -78,6 +34,7 @@ export const siweConfig: SIWEConfig = {
     );
     if (!response) throw new Error("No nonce returned.");
     const res = await response.json();
+    localStorage.setItem("anyape-signed-nonce", res.sig);
     return res.nonce;
   },
 
@@ -96,21 +53,22 @@ export const siweConfig: SIWEConfig = {
       chainId,
       nonce,
       // ASCII assertion to sign. Must not contain `\n`.
-      // statement: "Sign-In With Ethereum.",
-      statement: "KONTOL.",
+      statement: "Sign-In With ..",
     }).prepareMessage()
   ),
 
   verifyMessage: async (
     { message, signature }: { message: string; signature: string },
   ) => {
+    const signedNonce = localStorage.getItem("anyape-signed-nonce");
+    if (!signedNonce) throw Error("No signed nonce found");
     const response = await fetch(`${supabase.url}/functions/v1/siwe`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${supabase.anonKey}`,
       },
-      body: JSON.stringify({ message, signature }),
+      body: JSON.stringify({ message, signature, hmac: signedNonce }),
       // credentials: "include",
       credentials: "omit",
     });
@@ -123,13 +81,15 @@ export const siweConfig: SIWEConfig = {
   },
 
   getSession: async () => {
+    const clientJwt = localStorage.getItem(supabase.jwtStorageKey);
+    if (!clientJwt) return null;
     const response = await fetch(
       `${supabase.url}/functions/v1/siwe?method=session`,
       {
         method: "GET",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${supabase.anonKey}`, //TODO: CHANGE THIS INTO FETCHED CLIENT JWT
+          "Authorization": `Bearer ${clientJwt}`, //TODO: CHANGE THIS INTO FETCHED CLIENT JWT
         },
         // credentials: "include",
         credentials: "omit",
@@ -137,12 +97,13 @@ export const siweConfig: SIWEConfig = {
     );
     if (!response) throw new Error("No session returned.");
     const res = await response.json();
+    console.log("getSession res", res);
     return res;
   },
 
   signOut: async () => {
-    const { error } = await anonSupaFunc("logout");
-    if (error) throw new Error(error);
+    localStorage.removeItem(supabase.jwtStorageKey);
+    localStorage.removeItem("anyape-signed-nonce");
     return true;
   },
 };
